@@ -1,0 +1,58 @@
+name: Monitor QModem Updates
+
+on:
+  schedule:
+    - cron: '0 */12 * * *' # 每 12 小时检查一次更新 (可根据需求调整)
+  workflow_dispatch: # 允许手动触发检查
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 允许写入 commit（更新 SHA 记录文件）
+      actions: write   # 允许触发其他 workflow
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Fetch latest QModem commit SHA
+        id: get_commit
+        run: |
+          # 获取 FUjr/QModem 默认分支的最新 commit SHA
+          LATEST_SHA=$(curl -s "https://api.github.com/repos/FUjr/QModem/commits" | jq -r '.[0].sha')
+          echo "LATEST_SHA=$LATEST_SHA" >> $GITHUB_ENV
+          echo "Latest commit is $LATEST_SHA"
+
+      - name: Read previously recorded SHA
+        id: read_commit
+        run: |
+          # 读取本地记录的 SHA
+          if [ -f .qmodem_sha ]; then
+            PREV_SHA=$(cat .qmodem_sha)
+          else
+            PREV_SHA="none"
+          fi
+          echo "PREV_SHA=$PREV_SHA" >> $GITHUB_ENV
+          echo "Previous commit was $PREV_SHA"
+
+      - name: Trigger Build and Update SHA File
+        if: env.LATEST_SHA != env.PREV_SHA && env.LATEST_SHA != 'null'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "New QModem update detected! Triggering build..."
+          
+          # 更新本地 SHA 记录
+          echo ${{ env.LATEST_SHA }} > .qmodem_sha
+          
+          # 提交更改到当前仓库
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .qmodem_sha
+          git commit -m "chore: update QModem SHA to ${{ env.LATEST_SHA }}"
+          git push
+
+          # 使用 Github CLI 触发你的主编译工作流
+          # 注意：这里的 build.yml 必须替换为你实际的编译工作流文件名
+          gh workflow run build.yml
