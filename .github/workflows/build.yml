@@ -2,7 +2,7 @@
 # Copyright (c) 2023
 #
 
-name: Huasifei wh3000
+name: Huasifei wh3000 pro
 on:
   schedule:
     - cron: '0 22 * * *'
