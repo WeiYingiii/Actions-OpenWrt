@@ -1,0 +1,87 @@
+name: Build OpenWrt with QModem
+
+on:
+  workflow_dispatch: # 这个触发器必须保留，供 monitor.yml 自动调用
+  # push:            # 如果你想在修改本地代码时也触发编译，可以取消这两行的注释
+  #   branches: [ main ]
+
+env:
+  REPO_URL: https://github.com/coolsnowwolf/lede
+  REPO_BRANCH: master
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04 # 推荐使用 22.04 以获得更好的编译兼容性
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Initialize compilation environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Clone LEDE source code
+      working-directory: /workdir
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+
+    - name: Inject QModem Plugin
+      working-directory: /workdir/openwrt
+      run: |
+        # 将 QModem 直接拉取到 package 目录下参与编译
+        git clone https://github.com/FUjr/QModem.git package/QModem
+        
+        # 如果你还有其他的自定义修改（如修改默认IP、主题等），可以继续写在这里
+
+    - name: Update and install feeds
+      working-directory: /workdir/openwrt
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Load custom configuration
+      working-directory: /workdir/openwrt
+      run: |
+        # 将你仓库根目录下的 .config 文件移动到编译目录
+        # 注意：你需要事先用 make menuconfig 生成好 .config 并上传到你的 Github 仓库
+        [ -e $GITHUB_WORKSPACE/.config ] && mv $GITHUB_WORKSPACE/.config .config
+        make defconfig
+
+    - name: Download packages
+      working-directory: /workdir/openwrt
+      run: |
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile the firmware
+      working-directory: /workdir/openwrt
+      run: |
+        echo -e "$(nproc) thread compile"
+        # 默认使用全线程编译。如果遇到报错，会自动回退到单线程 (make -j1 V=s) 输出详细错误日志以便排查
+        make -j$(nproc) || make -j1 V=s
+
+    - name: Organize output files
+      id: organize
+      run: |
+        cd /workdir/openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+
+    - name: Upload firmware artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: OpenWrt_QModem_Firmware
+        path: ${{ env.FIRMWARE }}
